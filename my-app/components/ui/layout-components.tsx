@@ -6,8 +6,8 @@ export function Sidebar() {
     return (
         <div className="w-64 border-r bg-white h-full hidden lg:flex flex-col fixed top-0 left-0 bg-slate-50">
             <div className="p-6 h-16 flex items-center border-b">
-                <div className="w-8 h-8 bg-black text-white rounded-md flex items-center justify-center font-bold mr-2">TL</div>
-                <span className="font-bold text-xl tracking-tight">TitanLabs</span>
+                <div className="w-8 h-8 bg-black text-white rounded-md flex items-center justify-center font-bold mr-2">TQ</div>
+                <span className="font-bold text-xl tracking-tight">TradingQuant</span>
             </div>
 
             <div className="flex-1 py-6 px-3 gap-1 flex flex-col">

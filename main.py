@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from quant_backend.data_loader import DataLoader
 from quant_backend.network_engine import FinancialNetwork
 from quant_backend.ops_engine import OPSEngine
+from quant_backend.ai_oracle import AiOracle
 import pandas as pd
 
-app = FastAPI()
+app = FastAPI(title="TradingQuant API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,114 +16,99 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Khởi tạo DataLoader (Singleton)
+# Global instances
 loader = DataLoader()
+# Cache một network engine để dùng chung cho Oracle
+# Lưu ý: Trong production nên dùng Redis hoặc lru_cache
+global_network = None
+
+def get_or_create_network(period="6mo"):
+    global global_network
+    if global_network is None:
+        print("Initializing Global Network...")
+        prices = loader.get_close_price_matrix(period=period)
+        if not prices.empty:
+            global_network = FinancialNetwork(prices)
+            global_network.build_network(threshold=0.5)
+    return global_network
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "service": "TitanLabs Quant Engine (yfinance Powered)"}
+    return {"status": "ok", "service": "TradingQuant AI Engine"}
 
 @app.get("/api/analyze-network")
 def analyze_market_network(period: str = "6mo", threshold: float = 0.5):
-    """
-    Phân tích mạng lưới VN30 dùng yfinance.
-    period: 1mo, 3mo, 6mo, 1y...
-    threshold: Ngưỡng tương quan (0.5 - 0.9)
-    """
     try:
-        print(f"Fetch matrix period={period}...")
         prices = loader.get_close_price_matrix(period=period)
-        
-        if prices.empty:
-            raise HTTPException(status_code=404, detail="No data fetched")
+        if prices.empty: raise HTTPException(status_code=404, detail="No data")
             
-        print("Building graph...")
-        net_engine = FinancialNetwork(prices, window_size=30)
+        net_engine = FinancialNetwork(prices)
         net_engine.build_network(threshold=threshold)
         
-        stats = net_engine.analyze_centrality()
-        graph_data = net_engine.export_json_for_d3()
+        # Cập nhật global để Oracle dùng ké
+        global global_network
+        global_network = net_engine
         
-        stats_dict = stats.reset_index().rename(columns={'index': 'Ticker'}).to_dict(orient='records')
+        # 1. Cơ bản
+        stats = net_engine.analyze_centrality()
+        graph = net_engine.export_json_for_d3()
+        
+        # 2. Nâng cao: Tính Momentum Spillover
+        spillover = net_engine.compute_spillover_momentum()
+        
+        # Merge kết quả
+        # Stats là DataFrame index=Ticker, Spillover cũng vậy
+        combined_stats = stats.join(spillover)
+        stats_dict = combined_stats.reset_index().rename(columns={'index': 'Ticker'}).to_dict(orient='records')
         
         return {
-            "graph": graph_data,
-            "centrality": stats_dict,
-            "meta": {
-                "tickers": len(prices.columns),
-                "data_points": len(prices),
-                "period": period
-            }
+            "graph": graph,
+            "market_stats": stats_dict,
+            "meta": {"period": period}
         }
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Err: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/stock/{ticker}")
-def get_stock_detail(ticker: str):
+@app.get("/api/oracle/{ticker}")
+def ask_oracle(ticker: str):
     """
-    Lấy thông tin chi tiết mã (Info + Financials).
-    Ví dụ: ticker='HPG.VN' hoặc 'AAPL'
+    Hỏi ý kiến AI Oracle về mã này.
+    Ví dụ: HPG.VN, VNM.VN
     """
-    info = loader.get_ticker_info(ticker)
-    if not info:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-    return info
-
-@app.get("/api/stock/{ticker}/financials")
-def get_stock_financials(ticker: str):
-    """
-    Lấy báo cáo tài chính
-    """
-    return loader.get_financials(ticker)
+    # Đảm bảo network đã có dữ liệu để so sánh
+    net = get_or_create_network()
+    if net is None:
+        raise HTTPException(status_code=503, detail="System initializing...")
+        
+    oracle = AiOracle(loader, net)
+    result = oracle.ask(ticker)
+    return result
 
 @app.get("/api/optimize-portfolio")
 def optimize_portfolio(strategy: str = "EG", eta: float = 0.05, period: str = "6mo"):
-    """
-    Chạy thuật toán tối ưu danh mục (OPS).
-    strategy: 'EG' (Exponentiated Gradient) hoặc 'UCRP' (Benchmark)
-    eta: Learning rate (mặc định 0.05)
-    """
     try:
-        print(f"Loading data for OPS ({period})...")
-        # 1. Tải giá
         prices = loader.get_close_price_matrix(period=period)
-        if prices.empty:
-            raise HTTPException(status_code=404, detail="No price data available")
+        if prices.empty: raise HTTPException(status_code=404, detail="No data")
 
-        # 2. Chạy OPS
-        print(f"Running OPS Strategy: {strategy}...")
         engine = OPSEngine(prices)
         result = engine.run(strategy=strategy, eta=eta)
+        alloc = engine.get_latest_allocation(strategy=strategy, eta=eta)
         
-        # Lấy allocation mới nhất
-        latest_alloc = engine.get_latest_allocation(strategy=strategy, eta=eta)
-        
-        # Format lại dữ liệu Equity Curve để Frontend vẽ chart
-        # Chuyển index datetime thành string
-        equity_chart = []
+        chart = []
         if not result.get("equity_curve", pd.Series()).empty:
-            s = result["equity_curve"]
-            equity_chart = [{"date": str(d)[:10], "value": v} for d, v in s.items()]
+            chart = [{"date": str(d)[:10], "value": v} for d, v in result["equity_curve"].items()]
 
         return {
             "performance": {
-                "total_return_pct": result.get("total_return", 0),
-                "final_wealth": result.get("final_wealth", 0)
+                "return": result.get("total_return", 0),
+                "wealth": result.get("final_wealth", 0)
             },
-            "latest_allocation": latest_alloc,
-            "equity_curve": equity_chart,
-            "meta": {
-                "strategy": strategy,
-                "period": period,
-                "tickers_count": engine.n_assets
-            }
+            "allocation": alloc,
+            "chart": chart
         }
-
     except Exception as e:
-        print(f"OPS Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 if __name__ == "__main__":
     import uvicorn
