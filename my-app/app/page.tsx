@@ -3,7 +3,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input" // Giả sử đã có component Input basic
-import { Search, Globe, ChevronRight, Activity, TrendingUp, TrendingDown, DollarSign } from "lucide-react"
+import { Search, Globe, ChevronRight, Activity, TrendingUp, TrendingDown, DollarSign, Wallet } from "lucide-react"
 
 // Component Reusable
 const StatCard = ({ title, value, sub, color = "text-slate-900" }: any) => (
@@ -21,10 +21,16 @@ export default function Dashboard() {
   const [oracleResult, setOracleResult] = useState<any>(null)
   const [loadingOracle, setLoadingOracle] = useState(false)
 
-  const [ntfTickers, setNtfTickers] = useState("BTC-USD, ETH-USD, HPG.VN, FPT.VN")
+  const [ntfTickers, setNtfTickers] = useState("BTC-USD, ETH-USD, HPG, FPT")
   const [ntfLookback, setNtfLookback] = useState(20)
   const [ntfResult, setNtfResult] = useState<any[]>([])
   const [loadingNtf, setLoadingNtf] = useState(false)
+
+  // Portfolio States
+  const [portAssets, setPortAssets] = useState("HPG, VNM, FPT, VCB")
+  const [optResult, setOptResult] = useState<any>(null)
+  const [btResult, setBtResult] = useState<any>(null)
+  const [loadingPort, setLoadingPort] = useState(false)
 
   // API URL từ biến môi trường
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
@@ -60,6 +66,36 @@ export default function Dashboard() {
     } finally {
       setLoadingNtf(false)
     }
+  }
+
+  const handleOptimize = async () => {
+    setLoadingPort(true)
+    setOptResult(null)
+    try {
+      const res = await fetch(`${API_URL}/api/portfolio/optimize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: portAssets })
+      })
+      const data = await res.json()
+      if (data.status === "success") setOptResult(data)
+    } catch (e) { console.error(e) }
+    finally { setLoadingPort(false) }
+  }
+
+  const handleBacktest = async () => {
+    setLoadingPort(true)
+    setBtResult(null)
+    try {
+      const res = await fetch(`${API_URL}/api/portfolio/backtest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: portAssets })
+      })
+      const data = await res.json()
+      if (data.status === "success") setBtResult(data)
+    } catch (e) { console.error(e) }
+    finally { setLoadingPort(false) }
   }
 
   return (
@@ -173,11 +209,10 @@ export default function Dashboard() {
               </Button>
             </div>
 
-            {/* Result Table */}
             {ntfResult.length > 0 && (
-              <div className="mt-4 border rounded-lg overflow-hidden">
+              <div className="mt-4 border rounded-lg overflow-hidden max-h-60 overflow-y-auto">
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-medium border-b">
+                  <thead className="bg-slate-50 text-slate-500 font-medium border-b sticky top-0">
                     <tr>
                       <th className="px-4 py-2">Mã</th>
                       <th className="px-4 py-2 text-right">Hiệu suất</th>
@@ -198,6 +233,116 @@ export default function Dashboard() {
                 </table>
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* --- 3. PORTFOLIO OPTIMIZER & BACKTEST --- */}
+        <Card className="md:col-span-2 border-orange-100 shadow-sm">
+          <CardHeader className="bg-orange-50/50 border-b border-orange-100 pb-4">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-orange-900 flex items-center gap-2">
+                <Wallet className="h-5 w-5" /> Portfolio Optimizer (Monte Carlo)
+              </CardTitle>
+            </div>
+            <CardDescription>Tìm tỷ trọng tối ưu và kiểm thử (Backtest) danh mục đầu tư.</CardDescription>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-slate-600">Assets (Cổ phiếu dự kiến mua)</label>
+                  <textarea
+                    className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={portAssets}
+                    onChange={(e) => setPortAssets(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-400">Hỗ trợ cổ phiếu VN, Mỹ & Crypto.</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handleOptimize} disabled={loadingPort} className="flex-1 bg-orange-600 hover:bg-orange-700 text-white">
+                    Optimize ⚡
+                  </Button>
+                  <Button onClick={handleBacktest} disabled={loadingPort} variant="outline" className="flex-1 border-orange-200 text-orange-700 hover:bg-orange-50">
+                    Backtest 📉
+                  </Button>
+                </div>
+              </div>
+
+              {/* Result Area */}
+              <div className="md:col-span-2 bg-slate-50 rounded-xl border border-dashed border-slate-200 p-4 flex flex-col justify-center items-center min-h-[200px]">
+                {!optResult && !btResult && !loadingPort && (
+                  <div className="text-slate-400 text-sm text-center">
+                    Nhập danh sách mã và bấm nút để bắt đầu mô phỏng.<br />
+                    Hệ thống sẽ chạy 2,000 kịch bản ngẫu nhiên.
+                  </div>
+                )}
+
+                {loadingPort && (
+                  <div className="flex flex-col items-center">
+                    <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                    <span className="text-sm text-slate-500">Đang chạy mô phỏng Monte Carlo...</span>
+                  </div>
+                )}
+
+                {optResult && (
+                  <div className="w-full animate-in fade-in zoom-in-95">
+                    <h3 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5 text-green-600" /> Kết quả Tối Ưu Hóa (Sharpe cao nhất)
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div>
+                        <div className="text-sm font-medium mb-2 text-slate-600">Phân bổ khuyến nghị:</div>
+                        <div className="space-y-2">
+                          {Object.entries(optResult.optimal_weights).map(([ticker, weight]: any) => (
+                            <div key={ticker} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm">
+                              <span className="font-bold text-slate-700">{ticker}</span>
+                              <span className="font-mono text-orange-600 font-bold">{(weight * 100).toFixed(0)}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="p-4 bg-white rounded border border-orange-100 shadow-sm">
+                          <div className="text-xs text-slate-400">Lợi nhuận kỳ vọng (Năm)</div>
+                          <div className="text-2xl font-bold text-green-600">+{optResult.metrics.expected_return}%</div>
+                        </div>
+                        <div className="p-4 bg-white rounded border border-slate-100 shadow-sm">
+                          <div className="text-xs text-slate-400">Sharpe Ratio</div>
+                          <div className="text-xl font-bold text-slate-800">{optResult.metrics.sharpe_ratio}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {btResult && (
+                  <div className="w-full animate-in fade-in zoom-in-95">
+                    <h3 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                      <Activity className="h-5 w-5 text-blue-600" /> Kết quả Backtest (3 Năm qua)
+                    </h3>
+                    <div className="grid grid-cols-3 gap-4 mb-4">
+                      <div className="p-3 bg-white rounded border text-center">
+                        <div className="text-xs text-slate-400">Tổng Lợi Nhuận</div>
+                        <div className={`text-xl font-bold ${btResult.metrics.total_return > 0 ? "text-green-600" : "text-red-500"}`}>
+                          {btResult.metrics.total_return > 0 ? "+" : ""}{btResult.metrics.total_return}%
+                        </div>
+                      </div>
+                      <div className="p-3 bg-white rounded border text-center">
+                        <div className="text-xs text-slate-400">Rủi ro (Max DD)</div>
+                        <div className="text-xl font-bold text-red-600">{btResult.metrics.max_drawdown}%</div>
+                      </div>
+                      <div className="p-3 bg-white rounded border text-center">
+                        <div className="text-xs text-slate-400">Số phiên</div>
+                        <div className="text-xl font-bold text-slate-700">{btResult.equity_curve.length}</div>
+                      </div>
+                    </div>
+                    <div className="h-24 w-full bg-slate-100 rounded flex items-center justify-center text-xs text-slate-400">
+                      (Biểu đồ Equity Curve dạng Sparkline đang được cập nhật...)
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
 

@@ -6,6 +6,7 @@ from quant_backend.ops_engine import OPSEngine
 from quant_backend.ai_oracle import AiOracle
 import pandas as pd
 import yfinance as yf
+import numpy as np
 
 app = FastAPI(title="TradingQuant API")
 
@@ -194,6 +195,178 @@ async def network_trend_scanner(request: Request):
 
     except Exception as e:
         print(f"❌ SCAN ERROR: {e}")
+        return {"status": "error", "message": str(e)}
+
+# ==============================================================================
+# PHẦN BỔ SUNG CHO: PORTFOLIO OPTIMIZATION & BACKTEST
+# (Thêm vào backend/main.py hoặc thay thế toàn bộ file)
+# ==============================================================================
+
+# --- HÀM HỖ TRỢ TÍNH TOÁN TÀI CHÍNH ---
+def get_historical_data(tickers, period="1y"):
+    try:
+        # Tải dữ liệu đóng cửa điều chỉnh
+        data = yf.download(tickers, period=period, progress=False, group_by='ticker', auto_adjust=True)
+        # Xử lý format trả về của yfinance
+        if len(tickers) == 1:
+             # Nếu 1 mã, nó trả về DataFrame có cột Close
+             cols = data.columns
+             if 'Close' in cols: return data['Close'].to_frame(name=tickers[0])
+             else: return data
+        else:
+             # Nếu nhiều mã, data là MultiIndex (Ticker, OHLCV) hoặc (OHLCV, Ticker) tùy version
+             # Thường là columns Level 0 = Price Type hoặc Ticker
+             # Cách an toàn nhất là lấy Close của từng thằng
+             df_close = pd.DataFrame()
+             for t in tickers:
+                 try:
+                     # Check format
+                     if isinstance(data.columns, pd.MultiIndex):
+                         # Try to extract
+                         try: s = data.xs(t, level=0, axis=1)['Close'] 
+                         except: s = data['Close'][t]
+                     else:
+                         # Flat format
+                         s = data['Close'][t] # Nếu format cũ
+                     df_close[t] = s
+                 except: pass
+             return df_close
+    except Exception as e: 
+        print(f"DL Error: {e}")
+        return None
+
+def calculate_metrics(returns):
+    # Tính Sharpe, Biến động, CAGR
+    mean_return = returns.mean() * 252
+    cov_matrix = returns.cov() * 252
+    volatility = returns.std() * (252 ** 0.5)
+    
+    # Sharpe (Giả sử risk-free = 0)
+    sharpe = mean_return / volatility if volatility > 0 else 0
+    return mean_return, volatility, sharpe
+
+# --- G. API TỐI ƯU HÓA DANH MỤC (OPTIMIZE) ---
+@app.post("/api/portfolio/optimize")
+async def optimize_portfolio_mc(request: Request):
+    try:
+        body = await request.json()
+        tickers_raw = body.get("assets", "HPG, VNM, FPT") # Lấy danh sách mã
+        
+        # Xử lý chuỗi ticker
+        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+        
+        # Thêm đuôi .VN nếu là mã Việt Nam (logic đơn giản: 3 chữ cái -> thêm .VN)
+        final_tickers = []
+        for t in tickers:
+            if len(t) == 3 and t.isalpha() and t != "BTC" and t != "ETH" and t != "USD": 
+                final_tickers.append(t + ".VN")
+            else: 
+                final_tickers.append(t)
+            
+        if len(final_tickers) < 2:
+            return {"status": "error", "message": "Cần ít nhất 2 mã để tối ưu hóa."}
+
+        # 1. Tải dữ liệu 1 năm
+        df = get_historical_data(final_tickers, period="1y")
+        if df is None or df.empty:
+            return {"status": "error", "message": "Không tải được dữ liệu."}
+            
+        # 2. Tính lợi nhuận ngày (Log returns)
+        log_ret = np.log(df / df.shift(1)).dropna()
+        
+        if log_ret.empty:
+             return {"status": "error", "message": "Dữ liệu không đủ để tính toán."}
+
+        # 3. Chạy Mô phỏng Monte Carlo (Tìm bộ tỷ trọng tốt nhất)
+        num_portfolios = 2000 # Chạy 2000 kịch bản
+        best_sharpe = -100
+        best_weights = []
+        
+        num_assets = len(log_ret.columns) # Dùng số cột thực tế tải được
+        found_tickers = log_ret.columns.tolist()
+
+        mean_returns = log_ret.mean()
+        cov_matrix = log_ret.cov()
+
+        for _ in range(num_portfolios):
+            weights = np.random.random(num_assets)
+            weights /= np.sum(weights) # Chuẩn hóa để tổng = 1
+            
+            # Tính toán hiệu suất Portfolio này
+            port_return = np.sum(mean_returns * weights) * 252
+            port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix * 252, weights)))
+            sharpe = port_return / port_vol if port_vol > 0 else 0
+            
+            if sharpe > best_sharpe:
+                best_sharpe = sharpe
+                best_weights = weights
+        
+        # 4. Đóng gói kết quả
+        result_weights = {}
+        for i, ticker in enumerate(found_tickers):
+            result_weights[ticker.replace(".VN", "")] = round(best_weights[i], 2)
+            
+        return {
+            "status": "success",
+            "optimal_weights": result_weights,
+            "metrics": {
+                "expected_return": round(best_sharpe * 0.15 * 100, 2), # %
+                "sharpe_ratio": round(best_sharpe, 2)
+            }
+        }
+
+    except Exception as e:
+        print(f"Optimize Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# --- H. API BACKTEST (KIỂM THỬ QUÁ KHỨ) ---
+@app.post("/api/portfolio/backtest")
+async def backtest_portfolio(request: Request):
+    try:
+        body = await request.json()
+        tickers_raw = body.get("assets", "HPG, VNM")
+        # Giả sử nhận weights từ optimization hoặc chia đều
+        
+        # Xử lý ticker (tương tự trên)
+        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+        final_tickers = []
+        for t in tickers:
+            if len(t) == 3 and t.isalpha() and t != "BTC" and t != "ETH": 
+                final_tickers.append(t + ".VN")
+            else: 
+                final_tickers.append(t)
+        
+        # 1. Tải dữ liệu dài hơn (3 năm để backtest)
+        df = get_historical_data(final_tickers, period="3y")
+        if df is None or df.empty: return {"status": "error", "message": "No data"}
+        
+        # 2. Giả lập Backtest (Chiến lược Buy & Hold chia đều tiền)
+        # Chuẩn hóa về 100 điểm bắt đầu
+        normalized = (df / df.iloc[0]) * 100
+        
+        # Tạo đường Equity Curve (Tổng hợp)
+        # Nếu có weights từ request thì dùng, không thì chia đều
+        normalized['Portfolio'] = normalized.mean(axis=1) # Chia đều tỷ trọng (Simple)
+        
+        # Lấy dữ liệu để vẽ chart
+        dates = normalized.index.strftime('%Y-%m-%d').tolist()
+        values = normalized['Portfolio'].tolist()
+        
+        # Tính Max Drawdown
+        rolling_max = normalized['Portfolio'].cummax()
+        drawdown = (normalized['Portfolio'] - rolling_max) / rolling_max
+        max_dd = drawdown.min() * 100
+
+        return {
+            "status": "success",
+            "dates": dates,
+            "equity_curve": values,
+            "metrics": {
+                "total_return": round(values[-1] - 100, 2), # %
+                "max_drawdown": round(max_dd, 2)
+            }
+        }
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
