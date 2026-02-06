@@ -1,60 +1,18 @@
-# --- Python & Backend ---
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# --- 1. IGNORE ALL (Bỏ qua tất cả mọi thứ ở root) ---
+/*
 
-# Virtual Environments
-venv/
-.venv/
-env/
-.env/
+# --- 2. NGOẠI TRỪ (Giữ lại các file của dự án TitanLabs) ---
+!/my-app/
+!/quant_backend/
+!/main.py
+!/requirements.txt
+!/vn30_analysis*.py
+!/mock_vn30.py
+!/debug*.py
+!/.gitignore
+!/README.md
 
-# Data & Logs
-*.log
-*.sqlite
-*.db
-*.csv
-*.xlsx
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# --- Node.js & Frontend (my-app) ---
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# Next.js
-.next/
-out/
-build/
-
-# IDE specific
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
+# --- 3. Ignore rác bên trong project (phòng hờ) ---
+my-app/node_modules/
+my-app/.next/
+quant_backend/__pycache__/

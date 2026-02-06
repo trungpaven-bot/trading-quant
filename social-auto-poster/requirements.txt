@@ -1,5 +1,0 @@
-instagrapi
-tiktok-uploader
-schedule
-selenium
-webdriver-manager
