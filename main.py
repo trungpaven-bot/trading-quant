@@ -36,7 +36,7 @@ def get_or_create_network(period="6mo"):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "service": "TradingQuant AI Engine"}
+    return {"status": "ok", "message": "TradingQuant Server is Running", "server_time": pd.Timestamp.now().isoformat()}
 
 @app.get("/api/analyze-network")
 def analyze_market_network(period: str = "6mo", threshold: float = 0.5):

@@ -2,39 +2,60 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input" // Giả sử đã có component Input basic
+import { Input } from "@/components/ui/input"
 import { Search, Globe, ChevronRight, Activity, TrendingUp, TrendingDown, DollarSign, Wallet } from "lucide-react"
-
-// Component Reusable
-const StatCard = ({ title, value, sub, color = "text-slate-900" }: any) => (
-  <Card>
-    <CardContent className="p-6">
-      <div className="text-sm font-medium text-slate-500 mb-1">{title}</div>
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-slate-400 mt-1">{sub}</div>
-    </CardContent>
-  </Card>
-)
 
 export default function Dashboard() {
   const [ticker, setTicker] = useState("")
   const [oracleResult, setOracleResult] = useState<any>(null)
   const [loadingOracle, setLoadingOracle] = useState(false)
 
-  const [ntfTickers, setNtfTickers] = useState("BTC-USD, ETH-USD, HPG, FPT")
+  const [ntfTickers, setNtfTickers] = useState("BTC-USD, ETH-USD, HPG.VN, FPT.VN")
   const [ntfLookback, setNtfLookback] = useState(20)
   const [ntfResult, setNtfResult] = useState<any[]>([])
   const [loadingNtf, setLoadingNtf] = useState(false)
 
   // Portfolio States
-  const [portAssets, setPortAssets] = useState("HPG, VNM, FPT, VCB")
+  const [portAssets, setPortAssets] = useState("HPG.VN, VNM.VN, FPT.VN, VCB.VN")
   const [optResult, setOptResult] = useState<any>(null)
   const [btResult, setBtResult] = useState<any>(null)
   const [loadingPort, setLoadingPort] = useState(false)
 
+  // Server Status State
+  const [serverStatus, setServerStatus] = useState<"checking" | "online" | "offline">("checking")
+
   // API URL từ biến môi trường
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
+  // 1. Server Heartbeat Logic
+  const checkServerStatus = async () => {
+    setServerStatus("checking")
+    try {
+      // Timeout 8s
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
+
+      const res = await fetch(`${API_URL}/`, { signal: controller.signal })
+      clearTimeout(timeoutId)
+
+      if (res.ok) {
+        setServerStatus("online")
+      } else {
+        setServerStatus("offline")
+      }
+    } catch (e) {
+      setServerStatus("offline")
+    }
+  }
+
+  useEffect(() => {
+    checkServerStatus()
+    // Ping mỗi 60s để giữ kết nối hoặc check trạng thái
+    const interval = setInterval(checkServerStatus, 60000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // 2. Handlers
   const handleAskOracle = async () => {
     if (!ticker) return
     setLoadingOracle(true)
@@ -100,15 +121,27 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Header & Server Status */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">TradingQuant Dashboard</h1>
           <p className="text-slate-500">Phân tích thị trường & Tối ưu danh mục đầu tư.</p>
         </div>
         <div className="flex gap-2">
-          <div className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold flex items-center">
-            <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-            Market Open
+          <div
+            onClick={checkServerStatus}
+            className={`px-3 py-1 rounded-full text-xs font-bold flex items-center cursor-pointer transition-all border select-none ${serverStatus === "online" ? "bg-green-50 text-green-700 border-green-200" :
+                serverStatus === "checking" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                  "bg-red-50 text-red-700 border-red-200"
+              }`}
+            title="Bấm để lay server dậy (Ping)"
+          >
+            <span className={`w-2 h-2 rounded-full mr-2 ${serverStatus === "online" ? "bg-green-500 animate-pulse" :
+                serverStatus === "checking" ? "bg-amber-500 animate-bounce" :
+                  "bg-red-500"
+              }`}></span>
+            {serverStatus === "online" ? "Server Online" :
+              serverStatus === "checking" ? "Waking up..." : "Server Sleeping"}
           </div>
         </div>
       </div>
@@ -127,8 +160,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="p-6 space-y-4">
             <div className="flex gap-2">
-              <input
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              <Input
                 placeholder="Nhập mã (VD: HPG.VN, BTC-USD)..."
                 value={ticker}
                 onChange={(e) => setTicker(e.target.value)}
@@ -197,20 +229,19 @@ export default function Dashboard() {
             <div className="flex gap-2 items-center">
               <div className="w-1/3">
                 <label className="text-xs font-medium text-slate-600">Lookback (ngày)</label>
-                <input
+                <Input
                   type="number"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={ntfLookback}
                   onChange={(e) => setNtfLookback(parseInt(e.target.value))}
                 />
               </div>
-              <Button onClick={handleRunNtf} disabled={loadingNtf} className="flex-1 mt-4 bg-indigo-600 hover:bg-indigo-700 text-white">
+              <Button onClick={handleRunNtf} disabled={loadingNtf} className="flex-1 mt-6 bg-indigo-600 hover:bg-indigo-700 text-white">
                 {loadingNtf ? "Đang quét..." : "Quét Xu Hướng (Live)"}
               </Button>
             </div>
 
             {ntfResult.length > 0 && (
-              <div className="mt-4 border rounded-lg overflow-hidden max-h-60 overflow-y-auto">
+              <div className="mt-4 border rounded-lg overflow-hidden max-h-60 overflow-y-auto scrollbar-thin">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-slate-50 text-slate-500 font-medium border-b sticky top-0">
                     <tr>
@@ -273,14 +304,14 @@ export default function Dashboard() {
                 {!optResult && !btResult && !loadingPort && (
                   <div className="text-slate-400 text-sm text-center">
                     Nhập danh sách mã và bấm nút để bắt đầu mô phỏng.<br />
-                    Hệ thống sẽ chạy 2,000 kịch bản ngẫu nhiên.
+                    <span className="text-xs opacity-70">Hệ thống sẽ chạy 2,000 kịch bản ngẫu nhiên tìm tỷ trọng có Sharpe Ratio cao nhất.</span>
                   </div>
                 )}
 
                 {loadingPort && (
-                  <div className="flex flex-col items-center">
+                  <div className="flex flex-col items-center animate-in fade-in">
                     <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                    <span className="text-sm text-slate-500">Đang chạy mô phỏng Monte Carlo...</span>
+                    <span className="text-sm text-slate-500 animate-pulse">Đang chạy mô phỏng Monte Carlo...</span>
                   </div>
                 )}
 
@@ -296,19 +327,30 @@ export default function Dashboard() {
                           {Object.entries(optResult.optimal_weights).map(([ticker, weight]: any) => (
                             <div key={ticker} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm">
                               <span className="font-bold text-slate-700">{ticker}</span>
-                              <span className="font-mono text-orange-600 font-bold">{(weight * 100).toFixed(0)}%</span>
+                              <div className="flex items-center gap-2">
+                                <div className="h-2 bg-orange-200 rounded-full w-20 overflow-hidden">
+                                  <div className="h-full bg-orange-500" style={{ width: `${weight * 100}%` }}></div>
+                                </div>
+                                <span className="font-mono text-orange-600 font-bold min-w-[3rem] text-right">{(weight * 100).toFixed(0)}%</span>
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
                       <div className="space-y-4">
-                        <div className="p-4 bg-white rounded border border-orange-100 shadow-sm">
-                          <div className="text-xs text-slate-400">Lợi nhuận kỳ vọng (Năm)</div>
-                          <div className="text-2xl font-bold text-green-600">+{optResult.metrics.expected_return}%</div>
+                        <div className="p-4 bg-white rounded border border-orange-100 shadow-sm flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-slate-400">Lợi nhuận kỳ vọng / năm</div>
+                            <div className="text-2xl font-bold text-green-600">+{optResult.metrics.expected_return}%</div>
+                          </div>
+                          <TrendingUp className="h-8 w-8 text-green-100" />
                         </div>
-                        <div className="p-4 bg-white rounded border border-slate-100 shadow-sm">
-                          <div className="text-xs text-slate-400">Sharpe Ratio</div>
-                          <div className="text-xl font-bold text-slate-800">{optResult.metrics.sharpe_ratio}</div>
+                        <div className="p-4 bg-white rounded border border-slate-100 shadow-sm flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-slate-400">Sharpe Ratio (Hiệu quả)</div>
+                            <div className="text-xl font-bold text-slate-800">{optResult.metrics.sharpe_ratio}</div>
+                          </div>
+                          <Activity className="h-8 w-8 text-slate-100" />
                         </div>
                       </div>
                     </div>
@@ -335,9 +377,6 @@ export default function Dashboard() {
                         <div className="text-xs text-slate-400">Số phiên</div>
                         <div className="text-xl font-bold text-slate-700">{btResult.equity_curve.length}</div>
                       </div>
-                    </div>
-                    <div className="h-24 w-full bg-slate-100 rounded flex items-center justify-center text-xs text-slate-400">
-                      (Biểu đồ Equity Curve dạng Sparkline đang được cập nhật...)
                     </div>
                   </div>
                 )}
