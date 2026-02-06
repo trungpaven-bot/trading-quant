@@ -17,6 +17,7 @@ export default function Dashboard() {
 
   // Portfolio States
   const [portAssets, setPortAssets] = useState("HPG.VN, VNM.VN, FPT.VN, VCB.VN")
+  const [maxWeight, setMaxWeight] = useState(0.40) // Mặc định 40%
   const [optResult, setOptResult] = useState<any>(null)
   const [btResult, setBtResult] = useState<any>(null)
   const [loadingPort, setLoadingPort] = useState(false)
@@ -96,7 +97,10 @@ export default function Dashboard() {
       const res = await fetch(`${API_URL}/api/portfolio/optimize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assets: portAssets })
+        body: JSON.stringify({
+          assets: portAssets,
+          max_weight: maxWeight
+        })
       })
       const data = await res.json()
       if (data.status === "success") setOptResult(data)
@@ -283,12 +287,31 @@ export default function Dashboard() {
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Assets (Cổ phiếu dự kiến mua)</label>
                   <textarea
-                    className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                     value={portAssets}
                     onChange={(e) => setPortAssets(e.target.value)}
                   />
                   <p className="text-xs text-slate-400">Hỗ trợ cổ phiếu VN, Mỹ & Crypto.</p>
                 </div>
+
+                <div className="space-y-2 bg-orange-50 p-3 rounded-lg border border-orange-100">
+                  <label className="text-xs font-bold text-orange-800 flex justify-between">
+                    <span>Đa dạng hóa (Max Weight)</span>
+                    <span>{(maxWeight * 100).toFixed(0)}%</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range" min="0.1" max="1.0" step="0.05"
+                      className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                      value={maxWeight}
+                      onChange={(e) => setMaxWeight(parseFloat(e.target.value))}
+                    />
+                  </div>
+                  <p className="text-[10px] text-orange-600 italic">
+                    *Không dùng quá {(maxWeight * 100).toFixed(0)}% vốn cho 1 mã.
+                  </p>
+                </div>
+
                 <div className="flex gap-2">
                   <Button onClick={handleOptimize} disabled={loadingPort} className="flex-1 bg-orange-600 hover:bg-orange-700 text-white">
                     Optimize ⚡
@@ -304,7 +327,7 @@ export default function Dashboard() {
                 {!optResult && !btResult && !loadingPort && (
                   <div className="text-slate-400 text-sm text-center">
                     Nhập danh sách mã và bấm nút để bắt đầu mô phỏng.<br />
-                    <span className="text-xs opacity-70">Hệ thống sẽ chạy 2,000 kịch bản ngẫu nhiên tìm tỷ trọng có Sharpe Ratio cao nhất.</span>
+                    <span className="text-xs opacity-70">Hệ thống sẽ chạy 2,000 kịch bản ngẫu nhiên tìm tỷ trọng tối ưu.</span>
                   </div>
                 )}
 

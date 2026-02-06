@@ -250,49 +250,71 @@ def calculate_metrics(returns):
 async def optimize_portfolio_mc(request: Request):
     try:
         body = await request.json()
-        tickers_raw = body.get("assets", "HPG, VNM, FPT") # Lấy danh sách mã
+        tickers_raw = body.get("assets", "HPG, VNM, FPT")
+        # Nhận tham số max_weight (mặc định 1.0 = 100% - không ràng buộc)
+        max_weight = float(body.get("max_weight", 1.0)) 
         
         # Xử lý chuỗi ticker
         tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
         
-        # Thêm đuôi .VN nếu là mã Việt Nam (logic đơn giản: 3 chữ cái -> thêm .VN)
+        # Thêm đuôi .VN
         final_tickers = []
         for t in tickers:
-            if len(t) == 3 and t.isalpha() and t != "BTC" and t != "ETH" and t != "USD": 
+            if len(t) == 3 and t.isalpha() and t not in ["BTC", "ETH", "USD", "EUR", "GLD"]: 
                 final_tickers.append(t + ".VN")
             else: 
                 final_tickers.append(t)
             
         if len(final_tickers) < 2:
-            return {"status": "error", "message": "Cần ít nhất 2 mã để tối ưu hóa."}
+            return {"status": "error", "message": "Cần ít nhất 2 mã đe tối ưu hóa."}
+
+        # Kiểm tra tính hợp lệ của max_weight
+        min_possible_weight = 1.0 / len(final_tickers)
+        if max_weight < min_possible_weight:
+            return {
+                "status": "error", 
+                "message": f"Max Weight quá thấp ({max_weight*100}%). Với {len(final_tickers)} mã, tối thiểu phải là {min_possible_weight*100:.1f}%"
+            }
 
         # 1. Tải dữ liệu 1 năm
         df = get_historical_data(final_tickers, period="1y")
         if df is None or df.empty:
             return {"status": "error", "message": "Không tải được dữ liệu."}
             
-        # 2. Tính lợi nhuận ngày (Log returns)
+        # 2. Tính lợi nhuận
         log_ret = np.log(df / df.shift(1)).dropna()
-        
         if log_ret.empty:
-             return {"status": "error", "message": "Dữ liệu không đủ để tính toán."}
+             return {"status": "error", "message": "Dữ liệu không đủ."}
 
-        # 3. Chạy Mô phỏng Monte Carlo (Tìm bộ tỷ trọng tốt nhất)
-        num_portfolios = 2000 # Chạy 2000 kịch bản
+        # 3. Chạy Monte Carlo với RÀNG BUỘC (Constrained Optimization)
+        num_portfolios = 3000 # Tăng số lượng mẫu lên
         best_sharpe = -100
         best_weights = []
         
-        num_assets = len(log_ret.columns) # Dùng số cột thực tế tải được
+        num_assets = len(log_ret.columns)
         found_tickers = log_ret.columns.tolist()
 
         mean_returns = log_ret.mean()
         cov_matrix = log_ret.cov()
 
-        for _ in range(num_portfolios):
+        # Rejection Sampling Loop
+        valid_portfolios = 0
+        attempts = 0
+        max_attempts = num_portfolios * 5 # Tránh lặp vô hạn
+
+        while valid_portfolios < num_portfolios and attempts < max_attempts:
+            attempts += 1
+            # Sinh ngẫu nhiên
             weights = np.random.random(num_assets)
-            weights /= np.sum(weights) # Chuẩn hóa để tổng = 1
+            weights /= np.sum(weights)
             
-            # Tính toán hiệu suất Portfolio này
+            # KIỂM TRA RÀNG BUỘC
+            if np.max(weights) > max_weight:
+                continue # Bỏ qua bộ tỷ trọng này nếu vi phạm
+
+            valid_portfolios += 1
+            
+            # Tính toán hiệu suất
             port_return = np.sum(mean_returns * weights) * 252
             port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix * 252, weights)))
             sharpe = port_return / port_vol if port_vol > 0 else 0
@@ -301,6 +323,9 @@ async def optimize_portfolio_mc(request: Request):
                 best_sharpe = sharpe
                 best_weights = weights
         
+        if best_sharpe == -100:
+             return {"status": "error", "message": "Không tìm được phương án nào thỏa mãn Max Weight này."}
+
         # 4. Đóng gói kết quả
         result_weights = {}
         for i, ticker in enumerate(found_tickers):
@@ -310,8 +335,12 @@ async def optimize_portfolio_mc(request: Request):
             "status": "success",
             "optimal_weights": result_weights,
             "metrics": {
-                "expected_return": round(best_sharpe * 0.15 * 100, 2), # %
+                "expected_return": round(best_sharpe * 0.15 * 100, 2),
                 "sharpe_ratio": round(best_sharpe, 2)
+            },
+            "meta": {
+                "max_weight_used": max_weight,
+                "scenarios_run": valid_portfolios
             }
         }
 
