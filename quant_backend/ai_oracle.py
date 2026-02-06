@@ -8,90 +8,80 @@ class AiOracle:
 
     def ask(self, ticker):
         """
-        Phân tích định lượng tổng hợp cho 1 mã.
+        AI Oracle Logic (Rule-based):
+        1. Fundamental Snapshot: Lấy P/E, ROE từ yfinance.
+        2. Technical Signal: So sánh Giá hiện tại vs MA20.
         """
-        verdict = "NEUTRAL"
-        score = 50 # 0-100 (0=Strong Sell, 100=Strong Buy)
-        reasons = []
-        
         try:
-            # 1. Lấy dữ liệu cơ bản (Basic Info)
+            # --- 1. FUNDAMENTAL SNAPSHOT (Soi Cơ bản) ---
+            # Lấy thông tin từ yfinance (đã cache trong loader hoặc gọi trực tiếp)
             info = self.loader.get_ticker_info(ticker)
+            
+            # Xử lý dữ liệu thô
             pe = info.get('trailingPE', 0)
-            pb = info.get('priceToBook', 0)
-            sector = info.get('sector', 'Unknown')
+            roe = info.get('returnOnEquity', 0)
+            price = info.get('currentPrice', 0)
             
-            # 2. Phân tích kĩ thuật & Mạng lưới (Technical & Network)
-            # Lấy data VN30 để xây context (nếu ticker nằm trong đó)
-            # API hiện tại load toàn bộ VN30, ta giả sử ticker là 1 phần của VN30 hoặc ta load riêng
-            df_price = self.network.prices
-            
-            trend_signal = 0
-            neighbor_impact = "Trung lập"
-            
-            if ticker in df_price.columns:
-                # Chạy lại tính toán spillover nếu chưa có (nhẹ)
-                spillover_df = self.network.compute_spillover_momentum()
-                row = spillover_df.loc[ticker]
-                
-                own_mom = row['Own_Momentum']
-                net_mom = row['Neighbor_Momentum']
-                final_sig = row['Network_Signal']
-                
-                # Logic chấm điểm Trend
-                if final_sig > 0.05: # Tăng > 5%
-                    score += 20
-                    reasons.append(f"Xu hướng Tăng mạnh (Signal: {final_sig:.1%}).")
-                elif final_sig < -0.05:
-                    score -= 20
-                    reasons.append(f"Xu hướng Giảm (Signal: {final_sig:.1%}).")
-                
-                # Logic Spilover
-                if net_mom > own_mom:
-                    neighbor_impact = "Tích cực"
-                    reasons.append("Được hỗ trợ mạnh bởi dòng tiền ngành (Neighbors > Own).")
-                elif net_mom < own_mom and net_mom < 0:
-                    neighbor_impact = "Tiêu cực"
-                    reasons.append("Bị kìm hãm bởi thị trường chung xấu.")
+            # Nếu không có giá từ Info (lỗi API), thử lấy từ lịch sử
+            if price == 0 and not self.network.prices.empty and ticker in self.network.prices:
+                price = self.network.prices[ticker].iloc[-1]
 
-            # 3. Logic chấm điểm Value (P/E)
-            # Giả định sơ bộ: PE < 12 là rẻ, > 20 là đắt (cần chỉnh theo ngành thực tế)
-            if 0 < pe < 12:
-                score += 15
-                reasons.append(f"Định giá hấp dẫn (P/E={pe:.1f}).")
-            elif pe > 25:
-                score -= 10
-                reasons.append(f"Định giá khá cao (P/E={pe:.1f}).")
-                
-            # 4. Tổng hợp Verdict
-            if score >= 75: verdict = "STRONG BUY"
-            elif score >= 60: verdict = "BUY"
-            elif score <= 25: verdict = "STRONG SELL"
-            elif score <= 40: verdict = "SELL"
+            # Logic Fundamental Đơn giản
+            fund_signal = "TRUNG LẬP"
+            if 0 < pe < 12 and roe > 0.15: fund_signal = "RẺ (HẤP DẪN)"
+            elif pe > 25: fund_signal = "ĐẮT (CẨN TRỌNG)"
             
-            prompt_summary = (
-                f"Phân tích mã {ticker} ({sector}):\n"
-                f"- Hệ thống chấm điểm: {score}/100 ({verdict})\n"
-                f"- Định giá: P/E={pe:.1f}, P/B={pb:.1f}\n"
-                f"- Đà tăng trưởng mạng lưới: {neighbor_impact}\n"
-                f"- Lý do chính: {'; '.join(reasons)}"
+            # --- 2. AI ORACLE (Technical Rule-based) ---
+            # Lấy lịch sử giá để tính MA20
+            # Ta có thể dùng dữ liệu từ Network Engine (đã load sẵn VN30 6 tháng)
+            prices_series = None
+            if ticker in self.network.prices.columns:
+                prices_series = self.network.prices[ticker]
+            else:
+                # Nếu mã không nằm trong VN30 đã load, cần fetch riêng (nhưng để nhanh ta tạm skip hoặc fetch nóng)
+                # Ở đây giả định user hỏi mã trong VN30 trước
+                pass
+            
+            tech_verdict = "KHÔNG ĐỦ DỮ LIỆU"
+            ma20 = 0
+            
+            if prices_series is not None and len(prices_series) >= 20:
+                ma20 = prices_series.rolling(window=20).mean().iloc[-1]
+                current_price = prices_series.iloc[-1]
+                
+                # Rule-based Logic (Chính xác tuyệt đối)
+                if current_price > ma20:
+                    tech_verdict = "XU HƯỚNG TĂNG (NẮM GIỮ)"
+                else:
+                    tech_verdict = "XU HƯỚNG GIẢM (QUAN SÁT)"
+                    
+            # --- 3. Đóng gói kết quả ---
+            analysis_text = (
+                f"🤖 AI ORACLE ALERTS:\n"
+                f"- Tín hiệu Kỹ thuật: {tech_verdict}\n"
+                f"  (Giá {current_price:,.0f} vs MA20 {ma20:,.0f})\n"
+                f"- Tín hiệu Cơ bản: {fund_signal}\n"
+                f"  (P/E={pe:.1f}, ROE={roe*100:.1f}%)"
             )
             
             return {
                 "ticker": ticker,
-                "verdict": verdict,
-                "score": score,
-                "analysis": prompt_summary,
-                "raw_data": {
-                    "pe": pe,
-                    "network_signal": float(final_sig) if 'final_sig' in locals() else 0
-                }
+                "fundamental": {
+                    "pe": round(pe, 2) if pe else 0,
+                    "roe": f"{roe*100:.1f}%" if roe else "N/A",
+                    "signal": fund_signal
+                },
+                "technical": {
+                    "price": current_price,
+                    "ma20": round(ma20, 2),
+                    "signal": tech_verdict
+                },
+                "full_analysis": analysis_text
             }
             
         except Exception as e:
             return {
                 "ticker": ticker,
-                "verdict": "UNKNOWN",
-                "score": 0,
-                "analysis": f"Không đủ dữ liệu phân tích. Lỗi: {str(e)}"
+                "error": str(e),
+                "full_analysis": "Hệ thống đang bận hoặc không tìm thấy mã."
             }

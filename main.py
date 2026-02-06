@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from quant_backend.data_loader import DataLoader
 from quant_backend.network_engine import FinancialNetwork
 from quant_backend.ops_engine import OPSEngine
 from quant_backend.ai_oracle import AiOracle
 import pandas as pd
+import yfinance as yf
 
 app = FastAPI(title="TradingQuant API")
 
@@ -109,6 +110,91 @@ def optimize_portfolio(strategy: str = "EG", eta: float = 0.05, period: str = "6
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/network-trend")
+async def network_trend_scanner(request: Request):
+    try:
+        # 1. Nhận danh sách mã từ Web
+        body = await request.json()
+        tickers_raw = body.get("tickers", "BTC-USD, ETH-USD") # Chuỗi nhập vào
+        lookback = int(body.get("lookback", 20))
+        
+        # Xử lý chuỗi nhập: Tách dấu phẩy, xóa khoảng trắng
+        ticker_list = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+        
+        if not ticker_list:
+            return {"status": "error", "message": "Chưa nhập mã nào!"}
+
+        print(f"🔍 Scanning: {ticker_list} (Lookback: {lookback}d)")
+        
+        # 2. Tải dữ liệu LIVE từ Yahoo (Chỉ tải đủ số ngày cần thiết)
+        # Tải dư ra chút để đảm bảo đủ nến (lookback * 1.5)
+        period_str = f"{int(lookback * 2)}d" if lookback < 100 else "1y" # Tải dư ra chút
+        
+        # Download data
+        data = yf.download(ticker_list, period=period_str, progress=False, auto_adjust=True)
+        
+        results = []
+        
+        # 3. Tính toán hiệu suất (Performance)
+        # Logic xử lý DataFrame của yfinance (khá phức tạp do MultiIndex)
+        close_data = pd.DataFrame()
+        
+        # Trường hợp 1 mã
+        if len(ticker_list) == 1:
+            if 'Close' in data.columns:
+                close_data = data[['Close']].copy()
+                close_data.columns = ticker_list # Rename to ticker
+            else:
+                 # Đôi khi yfinance trả về Series trực tiếp nếu auto_adjust=True? Không, thường là DF.
+                 # Dự phòng
+                 close_data = data
+        else:
+             # Trường hợp nhiều mã: Columns là (Price, Ticker) hoặc chỉ Ticker nếu chỉ request Close?
+             # Khi request nhiều chỉ số (OHLC), 'Close' là level 0.
+             if 'Close' in data.columns:
+                 close_data = data['Close']
+             else:
+                 close_data = data # Có thể user request chỉ Close? (Hiện tại download mặc định lấy all)
+
+        # Loop calculate
+        for ticker in ticker_list:
+            try:
+                series = None
+                if ticker in close_data.columns:
+                    series = close_data[ticker]
+                
+                if series is not None and not series.empty:
+                    series = series.dropna()
+                    if len(series) >= lookback:
+                        start_price = float(series.iloc[-lookback])
+                        end_price = float(series.iloc[-1])
+                        
+                        if start_price > 0:
+                            change_pct = ((end_price - start_price) / start_price) * 100
+                            results.append({"ticker": ticker, "performance": round(change_pct, 2)})
+                        else:
+                             results.append({"ticker": ticker, "performance": 0, "note": "Giá = 0"})
+                    else:
+                        results.append({"ticker": ticker, "performance": 0, "note": "Không đủ dữ liệu"})
+                else:
+                    results.append({"ticker": ticker, "performance": 0, "note": "Không tìm thấy mã"})
+            except Exception as e:
+                print(f"Err calc {ticker}: {e}")
+                results.append({"ticker": ticker, "performance": 0, "note": "Lỗi tính toán"})
+
+        # 4. Sắp xếp từ Tăng mạnh nhất -> Giảm mạnh nhất
+        results.sort(key=lambda x: x["performance"], reverse=True)
+        
+        return {
+            "status": "success",
+            "data": results,
+            "best_performer": results[0]["ticker"] if results else "N/A"
+        }
+
+    except Exception as e:
+        print(f"❌ SCAN ERROR: {e}")
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
